@@ -3,6 +3,6 @@ numpy
 librosa>=0.10
 soundfile
 plotly
-tensorflow>=2.13,<2.18
+tensorflow>=2.20.0
 tensorflow_hub
 pandas
