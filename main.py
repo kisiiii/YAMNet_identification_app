@@ -45,6 +45,24 @@ def load_csv_audio(csv_file, target_date=None):
     timestamps = df['absolute_time_us'] / 1000000.0
     amplitudes = df['amplitude'].values
     
+    # タイムスタンプの形式をチェックして適切に処理
+    # 非常に大きな値の場合は、相対時間として扱う
+    if len(timestamps) > 0:
+        first_timestamp = timestamps.iloc[0] if hasattr(timestamps, 'iloc') else timestamps[0]
+        last_timestamp = timestamps.iloc[-1] if hasattr(timestamps, 'iloc') else timestamps[-1]
+        
+        # 通常のUnixタイムスタンプ（1970年以降）の場合は1,000,000,000秒以上
+        # それより小さい場合は相対時間として処理
+        if first_timestamp < 1000000000:
+            # 相対時間の場合：現在時刻を基準にして絶対時間を生成
+            current_time = datetime.now()
+            base_timestamp = current_time.timestamp()
+            # 最初のタイムスタンプを0秒として、相対的な時間差を保持
+            relative_duration = last_timestamp - first_timestamp
+            timestamps = timestamps - first_timestamp + base_timestamp
+            
+            print(f"情報: 相対時間データとして処理（継続時間: {relative_duration:.2f}秒）")
+    
     # 日付フィルタリング（指定された場合）
     if target_date is not None:
         # 日付範囲を計算（指定日の00:00:00から23:59:59まで）
@@ -65,7 +83,12 @@ def load_csv_audio(csv_file, target_date=None):
         
         # インデックスをリセット
         timestamps = timestamps.reset_index(drop=True) if hasattr(timestamps, 'reset_index') else pd.Series(timestamps).reset_index(drop=True)
-        amplitudes = amplitudes[date_mask] if isinstance(amplitudes, np.ndarray) else amplitudes.reset_index(drop=True)
+        # amplitudes は既に date_mask でフィルタリング済みなので、reset_index のみ実行
+        if hasattr(amplitudes, 'reset_index'):
+            amplitudes = amplitudes.reset_index(drop=True)
+        elif isinstance(amplitudes, np.ndarray):
+            # numpy配列の場合は何もしない（すでにフィルタリング済み）
+            pass
     
     # 無効な値（NaN、inf）をクリーニング
     valid_mask = np.isfinite(amplitudes)
@@ -77,6 +100,20 @@ def load_csv_audio(csv_file, target_date=None):
     if len(timestamps) > 1:
         dt = np.mean(np.diff(timestamps[:min(100, len(timestamps))]))  # 最初の100サンプル（またはそれ以下）の平均間隔
         estimated_sr = int(1.0 / dt) if dt > 0 else TARGET_SR
+        
+        # サンプル数から実際の継続時間を計算（タイムスタンプが不正確な場合のフォールバック）
+        calculated_duration = len(amplitudes) / estimated_sr
+        timestamp_duration = timestamps.iloc[-1] - timestamps.iloc[0] if hasattr(timestamps, 'iloc') else timestamps[-1] - timestamps[0]
+        
+        # タイムスタンプから計算した継続時間が異常に長い場合、サンプル数ベースを使用
+        if timestamp_duration > calculated_duration * 2 or timestamp_duration < calculated_duration / 2:
+            print(f"警告: タイムスタンプが不正確です。サンプル数から継続時間を計算しています。")
+            print(f"  タイムスタンプベース: {timestamp_duration:.2f}秒")
+            print(f"  サンプル数ベース: {calculated_duration:.2f}秒")
+            
+            # タイムスタンプを修正：線形に再配置
+            first_timestamp = timestamps.iloc[0] if hasattr(timestamps, 'iloc') else timestamps[0]
+            timestamps = pd.Series(np.linspace(first_timestamp, first_timestamp + calculated_duration, len(timestamps)))
     else:
         estimated_sr = TARGET_SR
     
@@ -324,7 +361,7 @@ with st.sidebar:
 st.write("**手順**：音声ファイル（WAV/MP3など）またはCSVファイルをアップロード → 波形確認 → 時刻選択 → 分類実行")
 
 # ファイルタイプ選択
-file_type = st.radio("ファイル形式を選択", ["音声ファイル", "CSVファイル"], index=0)
+file_type = st.radio("ファイル形式を選択", ["CSVファイル", "音声ファイル"], index=0)
 
 if file_type == "音声ファイル":
     uploaded = st.file_uploader("音声ファイル（WAV/MP3/M4A など）", type=["wav", "mp3", "m4a", "ogg", "flac"])
@@ -381,7 +418,11 @@ else:  # CSVファイル
         target_datetime = datetime.combine(target_date, datetime.min.time())
         
         # 指定日のデータを読み込み
-        y, estimated_sr, start_time, end_time, timestamps = load_csv_audio(uploaded, target_datetime)
+        if target_datetime.date() == start_time_all.date():
+            # 同じ日付なら全体のデータをそのまま使用（重複処理を避ける）
+            y, estimated_sr, start_time, end_time, timestamps = y_all, estimated_sr, start_time_all, end_time_all, timestamps_all
+        else:
+            y, estimated_sr, start_time, end_time, timestamps = load_csv_audio(uploaded, target_datetime)
         
         if len(y) == 0:
             st.warning(f"{target_date.strftime('%Y-%m-%d')} にはデータがありません。")
@@ -389,6 +430,7 @@ else:  # CSVファイル
             start_sec = 0.0
         else:
             y = ensure_mono_16k(y, estimated_sr)
+            # 実際のサンプリングレートで継続時間を計算
             duration_total = len(y) / TARGET_SR
             
             st.caption(f"選択日のデータ：{start_time.strftime('%Y-%m-%d %H:%M:%S')} から {end_time.strftime('%Y-%m-%d %H:%M:%S')} までの {duration_total:.2f} 秒")
