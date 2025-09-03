@@ -340,6 +340,12 @@ if file_type == "音声ファイル":
         
         st.caption(f"読み込み完了：{duration_total:.2f} 秒（16 kHz モノ化済）")
         
+        # 区間長とファイル長の確認
+        if duration_total < window_sec:
+            st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
+            st.error("区間長を短く設定してください。")
+            st.stop()
+        
         # 区間選択スライダー（秒数）
         start_sec = st.slider(
             "分析開始位置 [秒]",
@@ -386,6 +392,12 @@ else:  # CSVファイル
             duration_total = len(y) / TARGET_SR
             
             st.caption(f"選択日のデータ：{start_time.strftime('%Y-%m-%d %H:%M:%S')} から {end_time.strftime('%Y-%m-%d %H:%M:%S')} までの {duration_total:.2f} 秒")
+            
+            # 区間長とファイル長の確認
+            if duration_total < window_sec:
+                st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
+                st.error("区間長を短く設定してください。")
+                st.stop()
             
             # 時刻入力（時分秒で指定）
             st.subheader("🕐 推論開始時刻を指定")
