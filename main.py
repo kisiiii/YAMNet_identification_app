@@ -163,7 +163,13 @@ def slice_by_datetime(y, timestamps, start_datetime, duration_sec):
         end_idx = min(len(y), start_idx + segment_length)
         segment = y[start_idx:end_idx]
     else:
-        segment = y[indices]
+        # インデックスが配列の範囲内にあることを確認
+        valid_indices = indices[indices < len(y)]
+        if len(valid_indices) == 0:
+            # 有効なインデックスがない場合は配列全体を使用
+            segment = y
+        else:
+            segment = y[valid_indices]
     
     # 必要に応じてパディング
     target_length = int(duration_sec * TARGET_SR)
@@ -314,43 +320,57 @@ def get_accuracy_warning(duration_sec):
 with st.sidebar:
     st.header("🎛️ 設定")
     
-    # 区間長設定
-    st.subheader("🕐 解析区間長")
-    duration_type = st.selectbox(
-        "区間長の設定",
-        ["推奨5秒", "長め10秒", "短め2秒", "マニュアル"],
-        index=0,
-        help="推奨5秒: バランスの良い精度\n長め10秒: 最高精度\n短め2秒: 高速処理\nマニュアル: 自由設定"
+    # 時間指定機能の設定
+    st.subheader("🎯 時間指定機能")
+    enable_time_selection = st.checkbox(
+        "時間指定を有効にする",
+        value=False,
+        help="オフにすると、ファイル全体を区間長として自動設定します"
     )
     
-    # マニュアル入力の場合
-    manual_duration = None
-    if duration_type == "マニュアル":
-        manual_duration = st.number_input(
-            "区間長 [秒]",
-            min_value=0.5,
-            max_value=60.0,
-            value=5.0,
-            step=0.1,
-            format="%.1f",
-            help="0.5秒から60秒まで設定可能"
+    # 区間長設定（時間指定がオンの場合のみ表示）
+    if enable_time_selection:
+        st.subheader("🕐 解析区間長")
+        # 時間指定がオンの場合：従来通りのオプション
+        duration_type = st.selectbox(
+            "区間長の設定",
+            ["推奨5秒", "長め10秒", "短め2秒", "マニュアル"],
+            index=0,
+            help="推奨5秒: バランスの良い精度\n長め10秒: 最高精度\n短め2秒: 高速処理\nマニュアル: 自由設定"
         )
-    
-    # 実際の区間長を計算
-    window_sec = get_window_duration(duration_type, manual_duration)
-    
-    # 精度警告を表示
-    warning_msg = get_accuracy_warning(window_sec)
-    if "⚠️" in warning_msg:
-        st.error(warning_msg)
-    elif "⚡" in warning_msg:
-        st.warning(warning_msg)
-    elif "📊" in warning_msg:
-        st.info(warning_msg)
+        
+        # マニュアル入力の場合
+        manual_duration = None
+        if duration_type == "マニュアル":
+            manual_duration = st.number_input(
+                "区間長 [秒]",
+                min_value=0.5,
+                max_value=60.0,
+                value=5.0,
+                step=0.1,
+                format="%.1f",
+                help="0.5秒から60秒まで設定可能"
+            )
+        
+        # 実際の区間長を計算
+        window_sec = get_window_duration(duration_type, manual_duration)
     else:
-        st.success(warning_msg)
+        # 時間指定がオフの場合：区間長は後でファイル全体の長さに自動設定
+        window_sec = 60.0  # 暫定値（後で上書きされる）
     
-    st.caption(f"設定された区間長: {window_sec:.1f}秒")
+    # 精度警告を表示（時間指定がオンの場合のみ）
+    if enable_time_selection:
+        warning_msg = get_accuracy_warning(window_sec)
+        if "⚠️" in warning_msg:
+            st.error(warning_msg)
+        elif "⚡" in warning_msg:
+            st.warning(warning_msg)
+        elif "📊" in warning_msg:
+            st.info(warning_msg)
+        else:
+            st.success(warning_msg)
+        
+        st.caption(f"設定された区間長: {window_sec:.1f}秒")
     
     # その他の設定
     st.subheader("🔧 詳細設定")
@@ -377,21 +397,28 @@ if file_type == "音声ファイル":
         
         st.caption(f"読み込み完了：{duration_total:.2f} 秒（16 kHz モノ化済）")
         
-        # 区間長とファイル長の確認
-        if duration_total < window_sec:
-            st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
-            st.error("区間長を短く設定してください。")
-            st.stop()
-        
-        # 区間選択スライダー（秒数）
-        start_sec = st.slider(
-            "分析開始位置 [秒]",
-            min_value=0.0,
-            max_value=max(0.0, duration_total - window_sec),
-            value=0.0,
-            step=0.01
-        )
-        start_datetime = None
+        # 時間指定がオフの場合、ファイル全体の長さを区間長として使用
+        if not enable_time_selection:
+            window_sec = duration_total
+            st.info(f"🔄 時間指定オフ：ファイル全体（{duration_total:.2f}秒）を分析します")
+            start_sec = 0.0
+            start_datetime = None
+        else:
+            # 区間長とファイル長の確認
+            if duration_total < window_sec:
+                st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
+                st.error("区間長を短く設定してください。")
+                st.stop()
+            
+            # 区間選択スライダー（秒数）
+            start_sec = st.slider(
+                "分析開始位置 [秒]",
+                min_value=0.0,
+                max_value=max(0.0, duration_total - window_sec),
+                value=0.0,
+                step=0.01
+            )
+            start_datetime = None
         
         # 波形表示
         fig = make_wave_plot(y, TARGET_SR, start_sec, window_sec)
@@ -435,16 +462,23 @@ else:  # CSVファイル
             
             st.caption(f"選択日のデータ：{start_time.strftime('%Y-%m-%d %H:%M:%S')} から {end_time.strftime('%Y-%m-%d %H:%M:%S')} までの {duration_total:.2f} 秒")
             
-            # 区間長とファイル長の確認
-            if duration_total < window_sec:
-                st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
-                st.error("区間長を短く設定してください。")
-                st.stop()
+            # 時間指定がオフの場合、ファイル全体の長さを区間長として使用
+            if not enable_time_selection:
+                window_sec = duration_total
+                st.info(f"🔄 時間指定オフ：データ全体（{duration_total:.2f}秒）を分析します")
+                start_datetime = start_time
+                start_sec = 0.0
+            else:
+                # 区間長とファイル長の確認
+                if duration_total < window_sec:
+                    st.error(f"❌ エラー: 設定された区間長（{window_sec:.1f}秒）がファイルの長さ（{duration_total:.2f}秒）より長くなっています。")
+                    st.error("区間長を短く設定してください。")
+                    st.stop()
+                
+                # 時刻入力（時分秒で指定）
+                st.subheader("🕐 推論開始時刻を指定")
             
-            # 時刻入力（時分秒で指定）
-            st.subheader("🕐 推論開始時刻を指定")
-            
-            if duration_total > window_sec:
+            if enable_time_selection and duration_total > window_sec:
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
@@ -514,7 +548,7 @@ else:  # CSVファイル
                 
                 st.success(f"🎯 推論開始時刻: {start_datetime.strftime('%H:%M:%S')}")
                 
-            else:
+            elif enable_time_selection:
                 start_datetime = start_time
                 st.info(f"データ長が推論区間（{window_sec:.2f}秒）より短いため、全区間を使用します。")
             
@@ -534,9 +568,17 @@ if uploaded is not None:
     if st.button("この区間を分類", type="primary"):
         # CSVファイルの場合は日時から区間を抽出
         if file_type == "CSVファイル" and start_datetime is not None:
-            segment = slice_by_datetime(y, timestamps, start_datetime, window_sec)
+            # 時間指定がオフで全体データを処理する場合
+            if not enable_time_selection and window_sec == len(y) / TARGET_SR:
+                segment = y  # 全体データをそのまま使用
+            else:
+                segment = slice_by_datetime(y, timestamps, start_datetime, window_sec)
         else:
-            segment = slice_by_time(y, start_sec, window_sec, sr=TARGET_SR)
+            # 時間指定がオフで全体データを処理する場合
+            if not enable_time_selection and window_sec == len(y) / TARGET_SR:
+                segment = y  # 全体データをそのまま使用
+            else:
+                segment = slice_by_time(y, start_sec, window_sec, sr=TARGET_SR)
         
         # 入力は [samples] -> [N] の shape; TFは [N] でOK
         waveform = tf.convert_to_tensor(segment, dtype=tf.float32)
